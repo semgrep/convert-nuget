@@ -4,3 +4,5 @@ packages.config
 # Generated lock files
 packages.lock.json
 
+# Node modules
+node_modules/
