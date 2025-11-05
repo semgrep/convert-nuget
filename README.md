@@ -5,7 +5,7 @@ Recursively searches for `packages.config` files and converts each to `packages.
 ## Manual Usage
 
 ```bash
-node convert-nuget.js [--tfm <TFM>] [--root <DIR>]
+node convert-nuget.js [--tfm <TFM>] [--root <DIR>] [--fail-on-skipped]
 
 # Example: scan from current directory
 node convert-nuget.js
@@ -15,6 +15,9 @@ node convert-nuget.js --tfm net48
 
 # Example: scan from a specific directory
 node convert-nuget.js --root ./projects
+
+# Example: fail if any packages are skipped due to incompatibility
+node convert-nuget.js --fail-on-skipped
 ```
 
 ## Local Docker Usage
@@ -26,13 +29,14 @@ Pull the Docker image from GitHub Container Registry and run it locally:
 docker pull ghcr.io/semgrep/convert-nuget
 
 # Run the conversion (scan from current directory)
-docker run --rm -v $(pwd):/workspace -w /workspace ghcr.io/semgrep/convert-nuget
+# Note: -w /workspace is optional since /workspace is the default working directory
+docker run --rm -v $(pwd):/workspace ghcr.io/semgrep/convert-nuget
 
 # Run the conversion (scan from a specific subdirectory)
-docker run --rm -v $(pwd):/workspace -w /workspace ghcr.io/semgrep/convert-nuget --root /workspace/some/subdirectory
+docker run --rm -v $(pwd):/workspace ghcr.io/semgrep/convert-nuget --root /workspace/some/subdirectory
 
 # Run with custom target framework
-docker run --rm -v $(pwd):/workspace -w /workspace ghcr.io/semgrep/convert-nuget --tfm net48
+docker run --rm -v $(pwd):/workspace ghcr.io/semgrep/convert-nuget --tfm net48
 ```
 
 ## Docker CI Usage
@@ -41,17 +45,17 @@ docker run --rm -v $(pwd):/workspace -w /workspace ghcr.io/semgrep/convert-nuget
 # GitHub Actions example
 - name: Convert packages.config
   run: |
-    docker run -v ${{ github.workspace }}:/workspace -w /workspace ghcr.io/semgrep/convert-nuget
+    docker run -v ${{ github.workspace }}:/workspace ghcr.io/semgrep/convert-nuget
 
 # GitLab CI example
 convert-nuget:
   script:
-    - docker run -v $PWD:/workspace -w /workspace ghcr.io/semgrep/convert-nuget
+    - docker run -v $PWD:/workspace ghcr.io/semgrep/convert-nuget
 ```
 
 ```bash
-# Command line
-docker run -v $(pwd):/workspace -w /workspace ghcr.io/semgrep/convert-nuget
+# Command line (note: -w /workspace is optional)
+docker run -v $(pwd):/workspace ghcr.io/semgrep/convert-nuget
 ```
 
 ## GitHub Actions Usage
@@ -79,7 +83,7 @@ jobs:
 
       - name: Convert packages.config
         run: |
-          docker run -v "${{ github.workspace }}:/workspace" -w /workspace ghcr.io/semgrep/convert-nuget
+          docker run -v "${{ github.workspace }}:/workspace" ghcr.io/semgrep/convert-nuget
 
       - name: Commit updated lock files (if any)
         run: |
@@ -108,4 +112,5 @@ jobs:
 
 - `--tfm <TFM>`: Target framework moniker (default: `net472`)
 - `--root <DIR>`: Root directory to search (default: current working directory)
+- `--fail-on-skipped`: Exit with error code 2 if any packages are skipped due to incompatibility (default: warnings only)
 - `-h, --help`: Show help message
