@@ -2,6 +2,27 @@
 
 Recursively searches for `packages.config` files and converts each to `packages.lock.json`. The generated files are created in the same directory as each discovered `packages.config` file.
 
+## How It Works
+
+The script processes each `packages.config` file using one of two methods:
+
+1. **If a `.csproj` file exists** in the same directory as `packages.config`:
+   - Uses the existing `.csproj` file and runs `dotnet restore` on it
+   - Copies the generated `packages.lock.json` from the project directory or `obj/` subdirectory
+   - If multiple `.csproj` files are found in the same directory, the script will error out (only one `.csproj` per directory is supported)
+
+2. **If no `.csproj` file exists** (fallback mode):
+   - Generates a temporary `.csproj` file from the packages listed in `packages.config`
+   - Uses the target framework from `packages.config` (if specified) or the `--tfm` option
+   - Automatically skips packages that are incompatible with the target framework
+   - Generates `packages.lock.json` from the temporary project
+
+### Package Skipping
+
+When using the fallback mode (temporary `.csproj` generation), packages that are incompatible with the target framework are automatically skipped. By default, skipped packages are logged as warnings and the conversion continues. Use the `--fail-on-skipped` option to exit with error code 2 if any packages are skipped.
+
+**Note**: Package skipping only occurs in fallback mode. When using an existing `.csproj` file, all packages in `packages.config` are expected to be compatible with the project's target framework.
+
 ## Manual Usage
 
 ```bash
@@ -16,7 +37,7 @@ node convert-nuget.js --tfm net48
 # Example: scan from a specific directory
 node convert-nuget.js --root ./projects
 
-# Example: fail if any packages are skipped due to incompatibility
+# Example: fail if any packages are skipped due to incompatibility (fallback mode only)
 node convert-nuget.js --fail-on-skipped
 ```
 
@@ -111,6 +132,15 @@ jobs:
 ## Options
 
 - `--tfm <TFM>`: Target framework moniker (default: `net472`)
+  - Used when no `.csproj` file exists and no `targetFramework` is specified in `packages.config`
+  - Ignored when an existing `.csproj` file is found (the project's target framework is used instead)
+
 - `--root <DIR>`: Root directory to search (default: current working directory)
-- `--fail-on-skipped`: Exit with error code 2 if any packages are skipped due to incompatibility (default: warnings only)
+  - Recursively searches for all `packages.config` files starting from this directory
+
+- `--fail-on-skipped`: Exit with error code 2 if any packages are skipped due to incompatibility
+  - Only applies when using fallback mode (temporary `.csproj` generation)
+  - By default, skipped packages are logged as warnings and conversion continues
+  - Use this option in CI/CD pipelines to fail builds when packages are skipped
+
 - `-h, --help`: Show help message
