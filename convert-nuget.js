@@ -6,7 +6,7 @@
 
 const fs = require('fs').promises;
 const path = require('path');
-const { execSync, execFileSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const { XMLParser } = require('fast-xml-parser');
 
 const DEFAULT_TFM = 'net472';
@@ -170,32 +170,17 @@ ${packageRefs}
 async function findCsprojFile(dir) {
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
-    const csprojFiles = [];
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.csproj')) {
-        const fullPath = path.join(dir, entry.name);
-        // Validate path: ensure it resolves to expected directory (prevent path traversal)
-        const resolvedPath = path.resolve(fullPath);
-        const resolvedDir = path.resolve(dir);
-        if (!resolvedPath.startsWith(resolvedDir)) {
-          // Path traversal detected, skip this file
-          continue;
-        }
-        csprojFiles.push(fullPath);
-      }
-    }
-    if (csprojFiles.length === 0) {
-      return null;
-    }
+    const csprojFiles = entries
+      .filter(e => e.isFile() && e.name.endsWith('.csproj'))
+      .map(e => path.join(dir, e.name));
+    
+    if (csprojFiles.length === 0) return null;
     if (csprojFiles.length > 1) {
       throw new Error(`Multiple .csproj files found in ${dir}: ${csprojFiles.map(f => path.basename(f)).join(', ')}`);
     }
     return csprojFiles[0];
   } catch (err) {
-    if (err.message.includes('Multiple .csproj files')) {
-      throw err;
-    }
-    // Directory might not exist or be unreadable
+    if (err.message.includes('Multiple .csproj files')) throw err;
     return null;
   }
 }
@@ -229,37 +214,19 @@ async function processPackagesConfig(packagesConfigPath, defaultTfm, failOnSkipp
           cwd: dir,
           stdio: 'pipe',
         });
-        // Copy lock file if it exists in the project directory
-        // Handle race condition by catching errors during copy operation
+        // Copy lock file (check root first, then obj/)
         const lockPath = path.join(dir, 'packages.lock.json');
+        const objLockPath = path.join(dir, 'obj', 'packages.lock.json');
+        
         try {
-          await fs.access(lockPath);
-          // Lock file already in place
+          await fs.copyFile(lockPath, lockFilePath);
           console.log(`  ✓ Lock file already exists: ${lockFilePath}`);
           return { success: true, skippedPackages: [] };
         } catch {
-          // Lock file should be in obj/ subdirectory
-          const objLockPath = path.join(dir, 'obj', 'packages.lock.json');
           try {
-            // Use access to check existence, then copy with error handling for race conditions
-            await fs.access(objLockPath);
-            try {
-              await fs.copyFile(objLockPath, lockFilePath);
-              console.log(`  ✓ Generated: ${lockFilePath}`);
-              return { success: true, skippedPackages: [] };
-            } catch (copyErr) {
-              // Race condition: file might have been deleted between access and copy
-              // Check if it still exists
-              try {
-                await fs.access(objLockPath);
-                // Still exists, rethrow original error
-                throw copyErr;
-              } catch {
-                // File was deleted, treat as not found
-                console.log(`  Warning: Lock file not found after restore`);
-                return { success: false, skippedPackages: [] };
-              }
-            }
+            await fs.copyFile(objLockPath, lockFilePath);
+            console.log(`  ✓ Generated: ${lockFilePath}`);
+            return { success: true, skippedPackages: [] };
           } catch {
             console.log(`  Warning: Lock file not found after restore`);
             return { success: false, skippedPackages: [] };
@@ -301,16 +268,8 @@ async function processPackagesConfig(packagesConfigPath, defaultTfm, failOnSkipp
       let restoreSuccess = false;
       let lastError = null;
       
-      // Retry loop: remove incompatible packages on NU1202 errors
-      // Normalize version for comparison: remove trailing .0 segments (1.0.0.0 -> 1.0.0, but 1.0.0.1 -> 1.0.0.1)
-      const normalizeVersion = v => {
-        // Remove trailing .0 segments, but preserve non-zero segments
-        const parts = v.split('.');
-        while (parts.length > 1 && parts[parts.length - 1] === '0') {
-          parts.pop();
-        }
-        return parts.join('.');
-      };
+      // Normalize version for comparison: remove trailing .0 segments
+      const normalizeVersion = v => v.split('.').filter((p, i, arr) => i < arr.length - 1 || p !== '0').join('.');
       
       while (retryCount < maxRetries && compatiblePackages.length > 0) {
         try {
@@ -362,18 +321,15 @@ async function processPackagesConfig(packagesConfigPath, defaultTfm, failOnSkipp
 
       if (!restoreSuccess) {
         console.error('  Error: dotnet restore failed:');
-        const stdout = lastError.stdout?.toString();
-        const stderr = lastError.stderr?.toString();
-        if (stdout) console.error(stdout);
-        if (stderr) console.error(stderr);
-        return { success: false, skippedPackages: skippedPackages };
+        if (lastError.stdout) console.error(lastError.stdout.toString());
+        if (lastError.stderr) console.error(lastError.stderr.toString());
+        return { success: false, skippedPackages };
       }
 
       // Copy lock file
-      const lockPath = path.join(workdir, 'packages.lock.json');
-      await fs.copyFile(lockPath, lockFilePath);
+      await fs.copyFile(path.join(workdir, 'packages.lock.json'), lockFilePath);
       console.log(`  ✓ Generated: ${lockFilePath}`);
-      return { success: true, skippedPackages: skippedPackages };
+      return { success: true, skippedPackages };
     } finally {
       // Cleanup
       await fs.rm(workdir, { recursive: true, force: true });
@@ -391,33 +347,13 @@ async function processPackagesConfig(packagesConfigPath, defaultTfm, failOnSkipp
 async function main() {
   const { tfm, rootDir, failOnSkipped } = parseArgs();
 
-  // Resolve root directory to absolute path
+  // Resolve root directory to absolute path and validate
   const resolvedRootDir = path.resolve(rootDir);
   
-  // Validate path traversal: ensure resolved path is within expected bounds
-  // Get the actual current working directory to validate against
-  const cwd = process.cwd();
-  const resolvedCwd = path.resolve(cwd);
-  
-  // Check if the resolved path is actually a subdirectory or matches the expected path
-  // This prevents path traversal attacks like ../../../etc/passwd
-  if (!resolvedRootDir.startsWith(resolvedCwd) && resolvedRootDir !== resolvedCwd) {
-    // Allow paths that are absolute and start with / (Unix) or drive letter (Windows)
-    // but validate they're reasonable
-    const isAbsolute = path.isAbsolute(rootDir);
-    if (isAbsolute) {
-      // For absolute paths, ensure they exist and are directories
-      // The path.resolve() already normalized, but we need to ensure it's safe
-      // Check that it doesn't contain suspicious patterns
-      if (resolvedRootDir.includes('..') || resolvedRootDir.includes('~')) {
-        console.error(`Error: Invalid root directory path: ${resolvedRootDir}`);
-        process.exit(1);
-      }
-    } else {
-      // Relative paths should resolve within cwd
-      console.error(`Error: Root directory resolves outside expected bounds: ${resolvedRootDir}`);
-      process.exit(1);
-    }
+  // Validate path traversal: ensure resolved path doesn't contain suspicious patterns
+  if (resolvedRootDir.includes('..') || (resolvedRootDir.includes('~') && !resolvedRootDir.startsWith(process.env.HOME || ''))) {
+    console.error(`Error: Invalid root directory path: ${resolvedRootDir}`);
+    process.exit(1);
   }
 
   // Check if root directory exists
@@ -432,12 +368,33 @@ async function main() {
     process.exit(1);
   }
 
-  // Check for dotnet
-  try {
-    execSync('dotnet', ['--version'], { stdio: 'ignore' });
-  } catch (err) {
-    console.error('Error: dotnet CLI is required but not installed');
-    process.exit(1);
+  // Check for dotnet - try common paths, then fall back to PATH
+  const commonPaths = [
+    process.env.DOTNET_ROOT && path.join(process.env.DOTNET_ROOT, 'dotnet'),
+    '/usr/bin/dotnet',
+    '/usr/local/bin/dotnet',
+    '/usr/share/dotnet/dotnet'
+  ].filter(Boolean);
+  
+  let dotnetFound = false;
+  for (const testPath of commonPaths) {
+    try {
+      await fs.access(testPath);
+      execFileSync(testPath, ['--version'], { stdio: 'ignore' });
+      dotnetFound = true;
+      break;
+    } catch {
+      continue;
+    }
+  }
+  
+  if (!dotnetFound) {
+    try {
+      execFileSync('dotnet', ['--version'], { stdio: 'ignore' });
+    } catch {
+      console.error('Error: dotnet CLI is required but not installed');
+      process.exit(1);
+    }
   }
 
   console.log('=== NuGet packages.config to packages.lock.json Converter ===');
@@ -457,14 +414,11 @@ async function main() {
     const result = await processPackagesConfig(packagesConfig, tfm, failOnSkipped);
     if (result.success) {
       successCount++;
-      if (result.skippedPackages && result.skippedPackages.length > 0) {
-        totalSkippedPackages.push(...result.skippedPackages);
-      }
     } else {
       failCount++;
-      if (result.skippedPackages && result.skippedPackages.length > 0) {
-        totalSkippedPackages.push(...result.skippedPackages);
-      }
+    }
+    if (result.skippedPackages?.length > 0) {
+      totalSkippedPackages.push(...result.skippedPackages);
     }
   }
 
