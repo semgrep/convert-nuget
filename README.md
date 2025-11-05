@@ -60,6 +60,22 @@ docker run --rm -v $(pwd):/workspace ghcr.io/semgrep/convert-nuget --root /works
 docker run --rm -v $(pwd):/workspace ghcr.io/semgrep/convert-nuget --tfm net48
 ```
 
+## Options
+
+- `--tfm <TFM>`: Target framework moniker (default: `net472`)
+  - Used when no `.csproj` file exists and no `targetFramework` is specified in `packages.config`
+  - Ignored when an existing `.csproj` file is found (the project's target framework is used instead)
+
+- `--root <DIR>`: Root directory to search (default: current working directory)
+  - Recursively searches for all `packages.config` files starting from this directory
+
+- `--fail-on-skipped`: Exit with error code 2 if any packages are skipped due to incompatibility
+  - Only applies when using fallback mode (temporary `.csproj` generation)
+  - By default, skipped packages are logged as warnings and conversion continues
+  - Use this option in CI/CD pipelines to fail builds when packages are skipped
+
+- `-h, --help`: Show help message
+
 ## Docker CI Usage
 
 ```yaml
