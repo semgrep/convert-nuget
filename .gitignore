@@ -1,0 +1,6 @@
+# Sample packages.config file
+packages.config
+
+# Generated lock files
+packages.lock.json
+
