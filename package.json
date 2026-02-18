@@ -19,6 +19,6 @@
   },
   "homepage": "https://github.com/semgrep/convert-nuget#readme",
   "dependencies": {
-    "fast-xml-parser": "^5.3.1"
+    "fast-xml-parser": "^5.3.6"
   }
 }
